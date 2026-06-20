@@ -5,6 +5,8 @@
 # For a list of all contributors, visit:
 #   https://github.com/fla-org/flash-linear-attention/graphs/contributors
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 
@@ -272,6 +274,39 @@ def test_fla_layer_reset():
 
     assert layer.get_seq_length() == 2
     _assert_attn_state_tokens(layer.state["attn_state"], torch.arange(20, 22))
+
+
+def test_fla_layer_reorder_cache():
+    """Beam search reorders the cache across beams; every FLA state container must be reordered.
+
+    Covers the layouts FLA stores: a tensor, a tuple/list of tensors, and a dataclass state. A list
+    must stay a list so in-place decode updates keep working. Pure tensor ops, runs on CPU.
+    """
+    @dataclass
+    class _DummyState:
+        ht: torch.Tensor
+        offsets: torch.Tensor
+
+    rows = torch.arange(4, dtype=torch.float32).view(4, 1)
+    layer = FLALayer()
+    layer.state = {
+        "recurrent_state": _DummyState(ht=rows.clone(), offsets=rows.clone() + 100),
+        "attn_state": (rows.clone(), [rows.clone()]),
+        "conv_state": [rows.clone()],
+        "ffn_state": None,
+    }
+
+    layer.reorder_cache(torch.tensor([3, 2, 1, 0]))
+
+    expected = torch.tensor([[3.0], [2.0], [1.0], [0.0]])
+    state = layer.state
+    torch.testing.assert_close(state["recurrent_state"].ht, expected)
+    torch.testing.assert_close(state["recurrent_state"].offsets, expected + 100)
+    torch.testing.assert_close(state["attn_state"][0], expected)
+    torch.testing.assert_close(state["attn_state"][1][0], expected)
+    assert isinstance(state["conv_state"], list)
+    torch.testing.assert_close(state["conv_state"][0], expected)
+    assert state["ffn_state"] is None
 
 
 @pytest.mark.parametrize("cache_cls", [FLACache, LegacyFLACache])

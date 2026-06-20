@@ -10,7 +10,11 @@ import torch
 
 from fla.models import GatedDeltaNetConfig
 
-from .test_modeling_base import run_test_generation, run_test_model_forward_backward
+from .test_modeling_base import (
+    run_test_beam_search,
+    run_test_generation,
+    run_test_model_forward_backward,
+)
 
 
 # ===================================================================================
@@ -72,3 +76,23 @@ def test_generation(
     dtype: torch.dtype,
 ):
     run_test_generation(L, B, T, H, D, GatedDeltaNetConfig, dtype)
+
+
+@pytest.mark.parametrize(
+    ['L', 'B', 'T', 'H', 'D', 'dtype'],
+    [
+        pytest.param(*test, id="L{}-B{}-T{}-H{}-D{}-{}".format(*test))
+        for test in [
+            (2, 1, 64, 8, 64, torch.float32),
+        ]
+    ],
+)
+def test_beam_search(
+    L: int,
+    B: int,
+    T: int,
+    H: int,
+    D: int,
+    dtype: torch.dtype,
+):
+    run_test_beam_search(L, B, T, H, D, GatedDeltaNetConfig, dtype)

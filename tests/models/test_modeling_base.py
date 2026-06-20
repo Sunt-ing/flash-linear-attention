@@ -131,3 +131,54 @@ def run_test_generation(
     gen = torch.cat(logits, 1)
     gen = torch.cat([gen[i:i+1, start:] for i, start in enumerate(seq_start)], 1)
     assert_close('logits', ref, gen, tol)
+
+
+# ===================================================================================
+# REGRESSION: beam search must be able to reorder the recurrent-state cache across beams
+# ===================================================================================
+def run_test_beam_search(
+    L: int,
+    B: int,
+    T: int,
+    H: int,
+    D: int,
+    config_class: type,
+    dtype: torch.dtype,
+    num_beams: int = 2,
+    num_new_tokens: int = 6,
+):
+    """Beam search `generate()` must run and, with `num_beams=1`, match greedy decoding.
+
+    Beam search reorders the cache across beams; if the cache layer does not implement
+    `reorder_cache` for the FLA state layout, `generate(num_beams>1)` raises.
+    """
+    torch.manual_seed(42)
+    if config_class.__name__ in GENERATION_UNSUPPORTED:
+        pytest.skip(f"Generation test not supported for {config_class.__name__}.")
+    if config_class.__name__ in NOT_READY_FOR_TESTING:
+        pytest.skip(f"{config_class.__name__} is not yet ready for testing.")
+
+    model, config = create_model_and_config(config_class, L, H, D, dtype=dtype)
+    model.eval()
+    model = model.to(dtype).to(device)
+    input_ids = torch.randint(low=1, high=config.vocab_size, size=(B, T)).to(device)
+    attention_mask = torch.ones_like(input_ids)
+
+    with torch.no_grad():
+        greedy = model.generate(
+            input_ids, attention_mask=attention_mask, max_new_tokens=num_new_tokens, do_sample=False,
+        )[:, T:]
+        beam1 = model.generate(
+            input_ids, attention_mask=attention_mask, max_new_tokens=num_new_tokens,
+            num_beams=1, do_sample=False,
+        )[:, T:]
+        # beam search with more than one beam must at least run (cache reorder must work)
+        model.generate(
+            input_ids, attention_mask=attention_mask, max_new_tokens=num_new_tokens,
+            num_beams=num_beams, do_sample=False,
+        )
+
+    assert torch.equal(beam1, greedy), (
+        "num_beams=1 beam search must reproduce greedy decoding.\n"
+        f"beam1={beam1.tolist()}\ngreedy={greedy.tolist()}"
+    )

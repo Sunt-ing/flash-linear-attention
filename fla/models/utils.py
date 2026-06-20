@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import fields, is_dataclass, replace
 from typing import Any
 
 import torch
@@ -182,6 +183,25 @@ class FLALayer(CacheLayerMixin):
     def reset(self):
         self.state = None
         self._seen_tokens = 0
+
+    def reorder_cache(self, beam_idx: torch.Tensor):
+        # the base CacheLayer.reorder_cache assumes a keys/values layout; reorder FLA's own state instead
+        if self.state is None:
+            return
+
+        def _reorder(x):
+            if isinstance(x, torch.Tensor):
+                return x.index_select(0, beam_idx.to(x.device))
+            if isinstance(x, (tuple, list)):
+                return type(x)(_reorder(v) for v in x)
+            if is_dataclass(x) and not isinstance(x, type):
+                return replace(x, **{f.name: _reorder(getattr(x, f.name)) for f in fields(x)})
+            return x
+        for k in ("recurrent_state", "attn_state", "conv_state", "ffn_state"):
+            v = self.state.get(k, None)
+            if v is None:
+                continue
+            self.state[k] = _reorder(v)
 
 
 class LegacyFLACache(HFCacheBase):
